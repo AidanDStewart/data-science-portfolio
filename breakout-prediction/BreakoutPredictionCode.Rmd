@@ -1,0 +1,781 @@
+---
+title: "MiamiMarlins"
+author: "Aidan Stewart"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+# I did the github installation from Bill Petti
+library(baseballr)
+library(ggforce)
+library(tidyverse)
+library(lubridate)
+library(dplyr)
+library(ggplot2)
+library(glmnet)
+library(caret)
+library(pROC)
+
+set.seed(101)
+```
+
+```{r}
+
+## This fg_batter_leaders function is from the baseballr library
+## Description: this function allows you to scrape all leaderboard
+## statistics (basic and advanced) from FanGraphs.com
+
+# 2023 season
+fg_2023 <- fg_batter_leaders(
+  startseason = 2023,
+  endseason   = 2023,
+  pos         = "all",   
+  stats       = "bat",   
+  qual        = "200"
+)
+
+# 2024 season
+fg_2024 <- fg_batter_leaders(
+  startseason = 2024,
+  endseason   = 2024,
+  pos         = "all",   
+  stats       = "bat",   
+  qual        = "200"
+)
+
+# 2025 season
+fg_2025 <- fg_batter_leaders(
+  startseason = 2025,
+  endseason   = 2025,
+  pos         = "all",
+  stats       = "bat",
+  qual        = "200"
+)
+
+```
+
+```{r}
+
+### EDA
+
+# Removing the columns with NA values
+
+fg_2023_clean <- fg_2023[, colSums(is.na(fg_2023)) == 0]
+fg_2024_clean <- fg_2024[, colSums(is.na(fg_2024)) == 0]
+fg_2025_clean <- fg_2025[, colSums(is.na(fg_2025)) == 0]
+
+
+# Plotting WAR vs Plate Appearences
+war_vs_pa_scatter <- ggplot(data = fg_2024_clean, aes(PA, WAR)) +
+  geom_point() +
+  theme_bw()
+#plot(war_vs_pa_scatter)
+
+
+# Creating delta_war: Adding the WAR column from the next year
+# to the previous year's dataset as next_WAR and then calculating
+# the change in WAR
+fg_2023_final <- fg_2023_clean %>% left_join(
+  fg_2024_clean %>% select(playerid, WAR),
+  by = "playerid",
+  suffix = c("", "_next")
+)
+
+fg_2023_final <- fg_2023_final %>% 
+  filter(!is.na(WAR_next)) %>%
+  mutate(delta_WAR = WAR_next - WAR)
+  
+
+fg_2024_final <- fg_2024_clean %>% left_join(
+  fg_2025_clean %>% select(playerid, WAR),
+  by = "playerid",
+  suffix = c("", "_next")
+)
+
+fg_2024_final <- fg_2024_final %>% 
+  filter(!is.na(WAR_next)) %>%
+  mutate(delta_WAR = WAR_next - WAR)
+
+
+
+# Which columns to keep and why
+
+# ID columns, (not modeled)
+id_cols <- c(
+  "playerid",
+  "PlayerName"
+)
+
+age_col <- c(
+  "Age"
+)
+
+# Playing time variables
+pt_vars <- c(
+  "PA",
+  "G"
+)
+
+# Plate discipline vars
+discipline_vars <- c(
+  "BB_pct",
+  "K_pct",
+  "BB_K",
+  "O-Swing_pct",
+  "Z-Swing_pct",
+  "Swing_pct",
+  "O-Contact_pct",
+  "Z-Contact_pct",
+  "Contact_pct",
+  "Zone_pct",
+  "F-Strike_pct",
+  "SwStr_pct",
+  "CStr_pct",
+  "C+SwStr_pct"
+)
+
+# Batted Ball Vars
+batted_ball_vars <- c(
+  "GB_pct",
+  "FB_pct",
+  "LD_pct",
+  "IFFB_pct",
+  "GB_FB"
+)
+
+# Directional Tendencies
+direction_vars <- c(
+  "Pull_pct",
+  "Cent_pct",
+  "Oppo_pct"
+)
+
+# Contact Quality Variables
+contact_quality_vars <- c(
+  "Hard_pct",
+  "Med_pct",
+  "Soft_pct",
+  "Barrel_pct",
+  "HardHit_pct",
+  "EV",
+  "LA",
+  "maxEV"
+)
+
+# Outcome Variables
+results_vars <- c(
+  "AVG",
+  "OBP",
+  "SLG",
+  "ISO",
+  "BABIP",
+  "WAR"
+)
+
+# Expected Variables
+expected_vars <- c(
+  "xwOBA",
+  "xAVG",
+  "xSLG"
+)
+
+# + Variables
+plus_vars <- c(
+  "wRC_plus",
+  "AVG+",
+  "OBP+",
+  "SLG+",
+  "ISO+",
+  "BABIP+"
+)
+
+
+# Final Predictor List
+predictor_vars <- c(
+  age_col,
+  pt_vars,
+  discipline_vars,
+  batted_ball_vars,
+  direction_vars,
+  contact_quality_vars,
+  results_vars,
+  expected_vars,
+  plus_vars
+)
+
+
+```
+
+```{r}
+
+# Trying logistic regression
+# Using the fg_202x_final datasets
+fg_2023_logit <- fg_2023_final %>%
+  mutate(did_breakout = as.integer(delta_WAR >= 2))
+
+fg_2024_logit <- fg_2024_final %>%
+  mutate(did_breakout = as.integer(delta_WAR >= 2))
+
+did_breakout_plot <- ggplot(fg_2023_logit, aes(x = factor(did_breakout))) +
+  geom_bar(fill = "steelblue", color = "black") +
+  geom_text(
+    stat = "count",
+    aes(label = ..count..),
+    vjust = .5,
+    size = 5
+  ) +
+  labs(
+    title = "Breakout Indicator Distribution",
+    x = "did_breakout (0 = No, 1 = Yes)",
+    y = "Count"
+  ) +
+  theme_minimal()
+
+model_df_2023 <- fg_2023_logit %>%
+  select(
+    playerid,
+    PlayerName,
+    did_breakout,
+    any_of(predictor_vars)
+  ) %>%
+  mutate(
+    did_breakout = factor(did_breakout, levels = c(0, 1))
+  )
+
+
+
+```
+
+```{r}
+
+# Training predictors
+x_train <- model_df_2023 %>%
+  select(-did_breakout, -any_of(id_cols))
+
+y_train <- model_df_2023$did_breakout
+
+# Convert to matrix
+x_train_mat <- as.matrix(x_train)
+y_train_vec <- as.numeric(as.character(y_train))
+
+logit_enet <- cv.glmnet(
+  x = x_train_mat,
+  y = y_train_vec,
+  family = "binomial",
+  alpha = 0.5,
+  nfolds = 5,
+  standardize = TRUE,
+  type.measure = "auc"
+)
+
+logit_enet$lambda.min
+logit_enet$lambda.1se
+
+```
+
+```{r}
+
+# 1. Build modeling table
+model_df_2024 <- fg_2024_logit %>%
+  select(playerid, PlayerName, did_breakout, any_of(predictor_vars))
+
+# 2. Impute using TRAIN medians
+train_medians <- apply(x_train, 2, median, na.rm = TRUE)
+
+model_df_2024 <- model_df_2024 %>%
+  mutate(
+    across(
+      names(train_medians),
+      ~ ifelse(is.na(.x), train_medians[cur_column()], .x)
+    )
+  )
+
+# 3. Create test matrix
+x_test <- model_df_2024 %>%
+  select(-did_breakout, -playerid, -PlayerName)
+
+x_test_mat <- as.matrix(x_test)
+
+stopifnot(identical(colnames(x_test_mat), colnames(x_train_mat)))
+
+
+pred_prob_2024 <- as.numeric(
+  predict(
+    logit_enet,
+    newx = x_test_mat,
+    s = "lambda.min",
+    type = "response"
+  )
+)
+
+model_df_2024$pred_prob <- pred_prob_2024
+
+
+roc_2024 <- roc(
+  response = model_df_2024$did_breakout,
+  predictor = model_df_2024$pred_prob
+)
+
+auc(roc_2024)
+
+```
+
+```{r}
+
+
+threshold <- quantile(model_df_2024$pred_prob, 0.80)
+
+
+model_df_2024 <- model_df_2024 %>%
+  mutate(pred_class = ifelse(pred_prob >= threshold, 1, 0))
+
+caret::confusionMatrix(
+  factor(model_df_2024$pred_class),
+  factor(model_df_2024$did_breakout)
+)
+
+
+
+```
+
+```{r}
+
+# Predicting 2025 breakout players
+score_2025 <- fg_2025_clean %>%
+  select(playerid, PlayerName, any_of(colnames(x_train)))
+
+
+score_2025 <- score_2025 %>%
+  mutate(
+    across(
+      names(train_medians),
+      ~ ifelse(is.na(.x), train_medians[cur_column()], .x)
+    )
+  )
+
+x_2025_mat <- as.matrix(
+  score_2025 %>% select(-playerid, -PlayerName)
+)
+
+stopifnot(identical(colnames(x_2025_mat), colnames(x_train_mat)))
+
+
+score_2025$breakout_prob <- as.numeric(
+  predict(
+    logit_enet,
+    newx = x_2025_mat,
+    s = "lambda.min",
+    type = "response"
+  )
+)
+
+breakout_board_2025 <- score_2025 %>%
+  arrange(desc(breakout_prob))
+
+breakout_board_2025_filtered <- breakout_board_2025 %>%
+  filter(WAR < 3)
+
+
+ggplot(
+  breakout_board_2025_filtered,
+  aes(x = Age, y = breakout_prob, color = PA)
+) +
+  geom_point(alpha = 0.7, size = 2) +
+  geom_smooth(
+    aes(color = NULL),
+    method = "loess",
+    se = FALSE
+  ) +
+  scale_color_gradient(
+    low = "steelblue",
+    high = "darkorange",
+    name = "Plate Appearances"
+  ) +
+  labs(
+    title = "2025 Breakout Candidates (Excluding 3+ WAR Seasons)",
+    subtitle = "Elastic Net Logistic Model",
+    x = "Age",
+    y = "Predicted Breakout Probability"
+  ) +
+  theme_minimal()
+
+
+candidates <- breakout_board_2025_filtered %>%
+  mutate(
+    tier = ntile(breakout_prob, 4)
+  )
+
+candidates
+
+ggplot(
+  candidates,
+  aes(x = Age, y = breakout_prob, color = PA)
+) +
+  geom_point(alpha = 0.7, size = 2) +
+  geom_smooth(
+    aes(color = NULL),
+    method = "loess",
+    se = FALSE
+  ) +
+  scale_color_gradient(
+    low = "steelblue",
+    high = "darkorange",
+    name = "Plate Appearances"
+  ) +
+  labs(
+    title = "2025 Breakout Candidates (Excluding 3+ WAR Seasons)",
+    subtitle = "Elastic Net Logistic Model",
+    x = "Age",
+    y = "Predicted Breakout Probability"
+  ) +
+  theme_minimal()
+
+```
+
+```{r}
+
+top_15 <- breakout_board_2025_filtered %>%
+  arrange(desc(breakout_prob)) %>%
+  slice(1:15) %>%
+  select(
+    PlayerName,
+    Age,
+    PA,
+    WAR,
+    breakout_prob
+  )
+
+print(top_15)
+
+
+```
+
+```{r}
+
+# Extract coefs
+coef_df <- coef(logit_enet, s = "lambda.min") %>%
+  as.matrix() %>%
+  as.data.frame() %>%
+  rownames_to_column("variable")
+
+colnames(coef_df)[2] <- "coef"
+
+colnames(coef_df)
+
+
+player_name <- "Jordan Walker"
+
+player_index <- which(score_2025$PlayerName == player_name)
+
+x_player <- x_2025_mat[player_index, ] %>%
+  as.numeric()
+
+names(x_player) <- colnames(x_2025_mat)
+
+player_contrib <- coef_df %>%
+  filter(variable != "(Intercept)") %>%
+  mutate(
+    x_value = x_player[variable],
+    contribution = coef * x_value
+  ) %>%
+  filter(contribution != 0)
+
+
+
+player_contrib %>%
+  mutate(abs_contribution = abs(contribution)) %>%
+  arrange(desc(abs_contribution))
+
+```
+
+```{r}
+
+#jordan walker
+j_wal_stats <- read.csv("savant_data.csv")
+
+head(j_wal_stats)
+colnames(j_wal_stats)
+```
+
+```{r}
+
+# EDA with Jordan Walker
+ev_la <- j_wal_stats %>%
+  filter(
+    !is.na(launch_speed),
+    !is.na(launch_angle)
+  )
+
+ev_seq <- seq(98, 123, by = 0.1)
+
+barrel_bounds <- tibble(
+  launch_speed = ev_seq,
+  la_min = case_when(
+    launch_speed <= 100 ~ 26 - (launch_speed - 98),
+    TRUE ~ 24 - (launch_speed - 100) * (16 / 16)
+  ),
+  la_max = case_when(
+    launch_speed <= 100 ~ 30 + (launch_speed - 98) * 1.5,
+    TRUE ~ 33 + (launch_speed - 100) * (17 / 16) 
+  )
+)
+
+barrel_polygon <- bind_rows(
+  barrel_bounds %>% select(launch_angle = la_min, launch_speed),
+  barrel_bounds %>% 
+    select(launch_angle = la_max, launch_speed) %>% 
+    arrange(desc(launch_speed))
+)
+
+
+ggplot(ev_la, aes(x = launch_angle, y = launch_speed)) +
+
+  # Barrel zones
+  geom_polygon(
+    data = barrel_polygon,
+    aes(x = launch_angle, y = launch_speed),
+    fill = "orange",
+    alpha = 0.12
+  ) +
+
+  # EV–LA points
+  geom_point(
+    aes(color = estimated_woba_using_speedangle),
+    alpha = 0.55,
+    size = 2
+  ) +
+
+  scale_color_viridis_c(
+    option = "plasma",
+    name = "xwOBA"
+  ) +
+
+  labs(
+    title = "Exit Velocity vs Launch Angle",
+    subtitle = "Barrell Region is Shaded",
+    x = "Launch Angle (degrees)",
+    y = "Exit Velocity (mph)"
+  ) +
+
+  coord_cartesian(
+    xlim = c(-20, 70),
+    ylim = c(50, 120)
+  ) +
+
+  theme_minimal(base_size = 14)
+
+
+```
+
+```{r}
+
+# Spray chart
+spray_data <- j_wal_stats %>%
+  filter(
+    !is.na(hc_x),
+    !is.na(hc_y),
+    events %in% c("single", "double", "triple", "home_run")
+  )
+
+home_x <- 125
+home_y <- 200
+r <- 200
+
+ggplot(spray_data, aes(x = hc_x, y = hc_y)) +
+
+  # Hits
+  geom_point(
+    aes(color = launch_speed),
+    alpha = 0.7,
+    size = 2
+  ) +
+
+  # Outfield arc
+  geom_arc(
+    aes(
+      x0 = 125, y0 = 200,
+      r = 200,
+      start = pi, end = 2*pi
+    ),
+    linewidth = 0.6
+  ) +
+
+  # Foul lines
+  annotate(
+    "segment",
+    x = home_x, y = home_y,
+    xend = home_x - r * cos(pi/4),
+    yend = home_y - r * sin(pi/4),
+    linewidth = 0.6
+  ) +
+  annotate(
+    "segment",
+    x = home_x, y = home_y,
+    xend = home_x + r * cos(pi/4),
+    yend = home_y - r * sin(pi/4),
+    linewidth = 0.6
+  ) +
+
+
+  scale_color_viridis_c(option = "plasma") +
+  coord_fixed() +
+  scale_y_reverse() +
+  theme_void()
+
+
+
+
+```
+
+```{r}
+
+# trying to find statistics that are important.
+avg_la <- j_wal_stats %>%
+  filter(
+    !is.na(launch_angle),
+    type == "X"
+  ) %>%
+  summarise(
+    avg_la = mean(launch_angle),
+    median_la = median(launch_angle),
+    sd_la = sd(launch_angle),
+    n_balls = n()
+  )
+
+avg_la
+
+# His average launch angle on balls put in play is 10 degrees, which is very low
+```
+
+```{r}
+
+zone_perf <- j_wal_stats %>%
+  filter(
+    zone %in% 1:9,
+    !is.na(estimated_woba_using_speedangle),
+    !is.na(estimated_slg_using_speedangle),
+    !is.na(estimated_ba_using_speedangle)
+  ) %>%
+  group_by(zone) %>%
+  summarise(
+    xwOBA = mean(estimated_woba_using_speedangle),
+    xBA = mean(estimated_ba_using_speedangle),
+    xSLG = mean(estimated_slg_using_speedangle),
+    avg_EV = mean(launch_speed, na.rm = TRUE),
+    n = n()
+  )
+
+
+zone_coords <- tibble(
+  zone = 1:9,
+  x = rep(c(-1, 0, 1), times = 3),
+  y = rep(c(1, 0, -1), each = 3)
+)
+
+zone_plot <- left_join(zone_perf, zone_coords, by = "zone")
+
+
+xwOBA_Plot <- ggplot(zone_plot, aes(x = x, y = y, fill = xwOBA)) +
+  geom_tile(color = "white", linewidth = 1) +
+
+  geom_text(
+    aes(label = round(xwOBA, 3)),
+    color = "black",
+    size = 5,
+    fontface = "bold"
+  ) +
+
+  scale_fill_gradientn(
+    colors = c("blue", "white", "red"),
+    limits = c(.250, .6),
+    name = "xwOBA"
+  ) +
+
+  coord_fixed() +
+
+  labs(
+    title = "Expected wOBA by Strike Zone",
+    subtitle = "Based on Statcast xwOBA on contact",
+    x = NULL,
+    y = NULL
+  ) +
+
+  theme_minimal(base_size = 14) +
+  theme(
+    axis.text = element_blank(),
+    panel.grid = element_blank()
+  )
+
+
+xSLG_plot <- ggplot(zone_plot, aes(x = x, y = y, fill = xSLG)) +
+  geom_tile(color = "white", linewidth = 1) +
+
+  geom_text(
+    aes(label = round(xSLG, 3)),
+    color = "black",
+    size = 5,
+    fontface = "bold"
+  ) +
+
+  scale_fill_gradientn(
+    colors = c("blue", "white", "red"),
+    limits = c(.350, .900),
+    name = "xSLG"
+  ) +
+
+  coord_fixed() +
+
+  labs(
+    title = "Expected SLG by Strike Zone",
+    subtitle = "Based on Statcast xSLG on contact",
+    x = NULL,
+    y = NULL
+  ) +
+
+  theme_minimal(base_size = 14) +
+  theme(
+    axis.text = element_blank(),
+    panel.grid = element_blank()
+  )
+
+
+xBA_plot <- ggplot(zone_plot, aes(x = x, y = y, fill = xBA)) +
+  geom_tile(color = "white", linewidth = 1) +
+
+  geom_text(
+    aes(label = round(xBA, 3)),
+    color = "black",
+    size = 5,
+    fontface = "bold"
+  ) +
+
+  scale_fill_gradientn(
+    colors = c("blue", "white", "red"),
+    limits = c(.150, .500),
+    name = "xBA"
+  ) +
+
+  coord_fixed() +
+
+  labs(
+    title = "Expected BA by Strike Zone",
+    subtitle = "Based on Statcast xBA on contact",
+    x = NULL,
+    y = NULL
+  ) +
+
+  theme_minimal(base_size = 14) +
+  theme(
+    axis.text = element_blank(),
+    panel.grid = element_blank()
+  )
+
+
+xwOBA_Plot
+xSLG_plot
+xBA_plot
+
+```
