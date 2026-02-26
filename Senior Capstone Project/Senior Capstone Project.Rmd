@@ -1,0 +1,660 @@
+---
+title: "Senior Capstone Project"
+author: "Aidan Stewart"
+date: '2024-01-15'
+output: pdf_document
+editor_options: 
+  chunk_output_type: inline
+---
+
+#Setup
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE)
+```
+
+# Installing Packages
+
+```{r}
+library(dplyr)
+library(ggplot2)
+library(rpart.plot)
+library(reshape2)
+library(mltsp)
+library(e1071)
+```
+
+# Importing and Combining the .csv files (Baseball Reference)
+
+```{r}
+
+file_list <- list.files(pattern = "\\.csv$")
+
+standard_data <- data_frame()
+
+for (file in file_list) {
+  current_data <- read.csv(file)
+  file_name <- tools::file_path_sans_ext(basename(file))
+
+  current_data$player_name <- file_name
+  standard_data <- bind_rows(standard_data, current_data)
+}
+
+folder_path <- "C:/Users/Aidan/OneDrive/Documents/Senior Capstone Project/Advanced"
+
+file_list_ADV <- list.files(path = folder_path, pattern = "\\.csv$", full.names = TRUE)
+
+advanced_data <- data.frame()
+
+for (file in file_list_ADV) {
+  current_data <- read.csv(file)
+  file_name <- tools::file_path_sans_ext(basename(file))
+  extracted_name <- sub(" ADV$", "", file_name)
+
+  current_data$player_name <- extracted_name
+  advanced_data <- bind_rows(advanced_data, current_data)
+}
+
+common_columns = c("player_name", "Year", "Age", "Tm", "Lg")
+
+combined_data <- merge(standard_data, advanced_data, by = common_columns, all.x = TRUE)
+
+```
+
+# Subsetting the data
+
+```{r}
+
+combined_data_subset <- subset(combined_data, !(Year == "162 Game Avg."))
+
+
+combined_data_subset <- combined_data_subset[!grepl(c("Yrs"), combined_data_subset$Year, ignore.case = TRUE), ]
+
+
+combined_data_subset <- combined_data_subset[, !(names(combined_data_subset) %in% c("Pos", "Awards", "Year.additional", "Lg", "EV", "HardH."))]
+
+
+percentage_vars <- c("HR.", "SO.", "BB.", "LD.", "GB.", "FB.", "Pull.", "Cent.", "Oppo.", "cWPA", "RS.", "SB.", "XBT.")
+
+for(var in percentage_vars) {
+  combined_data_subset[[var]] <- as.numeric(gsub("%", "", combined_data_subset[[var]])) / 100
+}
+
+```
+
+# Coorelation Plot
+
+```{r}
+
+# Identify numeric variables
+numeric_vars <- sapply(combined_data_subset, is.numeric)
+
+# Subset the data to include only numeric variables
+numeric_data <- combined_data_subset[, numeric_vars]
+
+# Remove rows with missing values
+numeric_data_no_na <- na.omit(numeric_data)
+
+# Calculate the correlation matrix excluding missing values
+cor_matrix <- cor(numeric_data_no_na)
+
+# Find correlations with 'WPA'
+cor_with_WPA <- cor_matrix["WPA", ]
+
+# Convert cor_with_WPA to a data frame with headers
+cor_table <- data.frame(Variable = names(cor_with_WPA), Correlation = as.numeric(cor_with_WPA))
+
+# Order the table by Correlation in descending order
+cor_table <- cor_table[order(-cor_table$Correlation), ]
+
+# Print the sorted table
+print(cor_table)
+
+# Convert correlation matrix to long format, excluding missing values
+cor_long <- melt(cor_matrix, na.rm = TRUE)
+
+# Create a heatmap
+ggplot(cor_long, aes(Var1, Var2, fill = value)) +
+  geom_tile(color = "white") +
+  scale_fill_gradient2(low = "blue", mid = "white", high = "red", midpoint = 0, limit = c(-1, 1), space = "Lab", name="Correlation") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  coord_fixed()
+
+
+```
+
+# Entering Baseball Savant data
+
+```{r}
+
+new_data <- read.csv("C:/Users/Aidan/OneDrive/Documents/Senior Capstone Project/New/stats_all.csv")
+
+defensive_data <- read.csv("C:/Users/Aidan/OneDrive/Documents/Senior Capstone Project/New/outs_above_average.csv")
+
+common_columns = c("ï..last_name..first_name", "player_id", "year")
+
+combined_new_data <- merge(new_data, defensive_data, na.omit = TRUE, by = common_columns, all.x = TRUE)
+
+selected_columns <- combined_new_data %>%
+  select(ï..last_name..first_name, player_id, year, player_age, ab, pa, hit, home_run, k_percent, bb_percent, on_base_plus_slg, xba, xwoba, xiso, exit_velocity_avg, outs_above_average, fielding_runs_prevented, actual_success_rate_formatted)
+
+selected_data <- na.omit(selected_columns)
+
+selected_data
+
+# Set up the plotting area
+par(mfrow = c(1, 2))
+
+# Bar plot before removing outliers
+barplot(table(selected_data$player_age), col = "skyblue",
+        xlab = "Age", ylab = "Player Count")
+
+# Removing outliers
+selected_data_filtered <- selected_data %>%
+  filter(!(player_age <= 20) & !(player_age >= 40))
+
+# Bar plot after removing outliers
+barplot(table(selected_data_filtered$player_age), col = "skyblue",
+        xlab = "Age", ylab = "Player Count")
+
+table(selected_data_filtered$player_age)
+
+# Reset the plotting area to default
+par(mfrow = c(1, 1))
+
+
+
+# 2020 Data change
+
+selected_columns <- c("ab", "pa", "hit", "home_run", "outs_above_average", "fielding_runs_prevented")
+
+filtered_data <- selected_data_filtered[selected_data_filtered$year == 2020, ]
+
+# Multiply by 162 and divide by 60 for selected columns
+filtered_data[, selected_columns] <- floor(filtered_data[, selected_columns] * 162 / 60)
+
+selected_data_filtered[selected_data_filtered$year == 2020, ] <- filtered_data
+
+selected_data_filtered
+
+
+
+# Removing all seasons with less than 200 plate appearances
+selected_data_filtered <- selected_data_filtered[selected_data_filtered$pa >= 200, ]
+
+selected_data_filtered
+```
+
+# EDA for Baseball Savant
+
+```{r}
+
+plot(selected_data$player_age, selected_data$on_base_plus_slg, main = "OPS by Age", xlab = "Age", ylab = "OPS")
+
+
+plot(selected_data$player_age, selected_data$tb, main = "tb by Age", xlab = "Age", ylab = "tb")
+
+
+averages <- selected_data %>%
+  group_by(player_age) %>%
+  summarise(avg_on_base_plus_slg = mean(on_base_plus_slg))
+
+ggplot(averages, aes(x = player_age, y = avg_on_base_plus_slg)) +
+  geom_bar(stat = "identity", fill = "skyblue", color = "black") +
+  labs(title = "Average of OPS by Age", x = "Age", y = "Average OPS")
+
+
+averages <- selected_data %>%
+  group_by(player_age) %>%
+  summarise(avg_on_base_plus_slg = mean(outs_above_average, na.rm = TRUE))
+
+ggplot(averages, aes(x = player_age, y = avg_on_base_plus_slg)) +
+  geom_bar(stat = "identity", fill = "skyblue", color = "black") +
+  labs(title = "Average outs above average by Age", x = "Age", y = "Average OAA")
+
+
+plot(selected_data_filtered$player_age, selected_data_filtered$on_base_plus_slg, main = "OPS by Age", xlab = "Age", ylab = "OPS")
+
+plot(selected_data_filtered$player_age, selected_data_filtered$tb, main = "tb by Age", xlab = "Age", ylab = "tb")
+
+averages <- selected_data_filtered %>%
+  group_by(player_age) %>%
+  summarise(avg_on_base_plus_slg = mean(on_base_plus_slg))
+
+ggplot(averages, aes(x = player_age, y = avg_on_base_plus_slg)) +
+  geom_bar(stat = "identity", fill = "skyblue", color = "black") +
+  labs(title = "Average of OPS by Age", x = "Age", y = "Average OPS")
+
+
+averages <- selected_data_filtered %>%
+  group_by(player_age) %>%
+  summarise(avg_on_base_plus_slg = mean(outs_above_average, na.rm = TRUE))
+
+ggplot(averages, aes(x = player_age, y = avg_on_base_plus_slg)) +
+  geom_bar(stat = "identity", fill = "skyblue", color = "black") +
+  labs(title = "Average outs above average by Age", x = "Age", y = "Average OAA")
+```
+
+
+# Making the quantiles
+
+```{r}
+
+calculate_quantiles <- function(data, variable_name) {
+  quantile_col <- paste0(variable_name, "_quantile")
+  
+  data <- data %>%
+    group_by(player_age) %>%
+    mutate(!!quantile_col := ifelse(
+      is.na(get(variable_name)),
+      NA_real_,  # Handle NA values
+      ifelse(get(variable_name) < quantile(get(variable_name), 0.25, na.rm = TRUE), 0,
+             ifelse(get(variable_name) <= quantile(get(variable_name), 0.75, na.rm = TRUE), 1, 2)
+      )
+    )) %>%
+    ungroup()  # Ungroup to remove grouping
+
+  return(data)
+}
+
+# List of variables to loop through
+variables_to_iterate <- c("xiso", "outs_above_average", "on_base_plus_slg", "xba")
+
+# Loop through variables and apply the function
+for (variable in variables_to_iterate) {
+  selected_data_filtered <- calculate_quantiles(selected_data_filtered, variable)
+}
+
+selected_data_filtered <- selected_data_filtered %>%
+  mutate(total_quantile = rowSums(select(., ends_with("_quantile")), na.rm = TRUE))
+
+# Filter instances where total_quantile is 8
+instances_with_total_8 <- selected_data_filtered %>%
+  filter(total_quantile == 8)
+
+# Print the instances
+print(instances_with_total_8)
+
+```
+
+# Plotting the data for the 4 variables
+
+```{r}
+
+par(mfrow=c(2, 2))
+
+for (variable in variables_to_iterate) {
+
+  median_data <- aggregate(selected_data_filtered[[variable]], by = list(selected_data_filtered$player_age), FUN = median, na.rm = TRUE)
+  names(median_data) <- c("player_age", "median_value")  
+  
+  plot(ggplot(selected_data_filtered, aes_string(x = "player_age", y = variable)) +
+          geom_point() +
+          geom_line(data = median_data, aes(y = median_value), color = "blue", size = 1.5) + # Add smooth curve representing median
+          labs(title = paste("Scatter Plot of Players for", variable),
+               x = "Player Age",
+               y = variable) +
+          theme_minimal())
+}
+
+
+
+# Add median line and quartiles to the plots
+
+```
+
+# Making the composite variable
+
+```{r}
+
+# Adding weights to the variables, I decided to do .6 for offensive stats and then .4 for defensive.
+# Stating that the offensive part of the game is 60% of being a good player and then defensive is 40%.
+
+weights <- c(.2, .4, .2, .2)
+
+# These are the variables that I ended up iterating with.
+variables_to_iterate <- c("xiso", "outs_above_average", "on_base_plus_slg", "xba")
+
+# Normalize the four variables.
+normalized_1 <- (selected_data_filtered$xiso - mean(selected_data_filtered$xiso)) / sd(selected_data_filtered$xiso)
+normalized_2 <- (selected_data_filtered$outs_above_average - mean(selected_data_filtered$outs_above_average)) / sd(selected_data_filtered$outs_above_average)
+normalized_3 <- (selected_data_filtered$on_base_plus_slg - mean(selected_data_filtered$on_base_plus_slg)) / sd(selected_data_filtered$on_base_plus_slg)
+normalized_4 <- (selected_data_filtered$xba - mean(selected_data_filtered$xba)) / sd(selected_data_filtered$xba)
+
+# Add the weights to each normalized variable
+composite_score <- (weights[1] * normalized_1) +
+                   (weights[2] * normalized_2) +
+                   (weights[3] * normalized_3) +
+                   (weights[4] * normalized_4)
+
+# Put the variable into the dataset for each person
+selected_data_filtered$CompositeScore <- composite_score
+
+```
+
+
+
+```{r}
+
+
+
+# Group data by player_id
+selected_data_filtered <- selected_data_filtered %>%
+  group_by(player_id) %>%
+  mutate(average_score = mean(CompositeScore),  # Calculate the average composite score for each player
+         average_minus_year = CompositeScore - average_score) %>%
+  ungroup()
+
+# View the updated dataset
+print(selected_data_filtered)
+
+
+averages_minus_year <- selected_data_filtered %>%
+  group_by(player_age) %>%
+  summarise(avg_weightCompositeScore = mean(average_minus_year, na.rm = TRUE))
+
+
+ggplot(averages_minus_year, aes(x = player_age, y = avg_weightCompositeScore)) +
+  geom_bar(stat = "identity", fill = "skyblue", color = "black") +
+  labs(x = "Age", y = "Normalized Composite score")
+
+
+
+avg_weight_quad_model <- lm(avg_weightCompositeScore ~ poly(player_age, 2), data = averages_minus_year)
+
+summary(avg_weight_quad_model)
+
+
+# Define a sequence of ages
+age_weight_seq <- seq(from = min(averages_minus_year$player_age), to = max(averages_minus_year$player_age), by = 1)
+
+# Predictions for the quadratic model
+avg_weight_quad_predictions <- predict(avg_weight_quad_model, newdata = data.frame(player_age = age_weight_seq))
+
+
+# Plot the actual averages and predicted values with a bar plot
+ggplot() +
+  geom_bar(data = averages_minus_year, aes(x = player_age, y = avg_weightCompositeScore), stat = "identity", fill = "skyblue", color = "black") +
+  geom_line(data = data.frame(player_age = age_weight_seq, predicted_avg_quad = avg_weight_quad_predictions),
+            aes(x = player_age, y = predicted_avg_quad), color = "red", size = 1, linetype = "dashed") +
+  labs(x = "Age", y = "Normalized Composite Score")
+
+
+
+  
+```
+
+# Finding a model on the averages
+
+```{r}
+
+averages <- selected_data_filtered %>%
+  group_by(player_age) %>%
+  summarise(avg_CompositeScore = mean(CompositeScore, na.rm = TRUE))
+
+ggplot(averages, aes(x = player_age, y = avg_CompositeScore)) +
+  geom_bar(stat = "identity", fill = "skyblue", color = "black") +
+  labs(x = "Age", y = "Average Composite score")
+
+avg_model <- lm(avg_CompositeScore ~ player_age, data = averages)
+
+ggplot(averages, aes(x = player_age, y = avg_CompositeScore)) +
+  geom_bar(stat = "identity", fill = "skyblue", color = "black") +
+  geom_smooth(method = "lm", se = FALSE, color = "red", linetype = "dashed", formula = y ~ x) +  # Adding model line
+  labs(x = "Age", y = "Average Composite score")
+
+summary(avg_model)
+
+```
+
+# Quadratic model
+
+```{r}
+
+# Fit a quadratic regression model using the average composite score by age
+avg_quad_model <- lm(avg_CompositeScore ~ poly(player_age, 2), data = averages)
+
+# Define a sequence of ages
+age_seq <- seq(from = min(averages$player_age), to = max(averages$player_age), by = 1)
+
+# Predictions for the quadratic model
+avg_quad_predictions <- predict(avg_quad_model, newdata = data.frame(player_age = age_seq))
+
+
+# Plot the actual averages and predicted values with a bar plot
+ggplot() +
+  geom_bar(data = averages, aes(x = player_age, y = avg_CompositeScore), stat = "identity", fill = "skyblue", color = "black") +
+  geom_line(data = data.frame(player_age = age_seq, predicted_avg_quad = avg_quad_predictions),
+            aes(x = player_age, y = predicted_avg_quad), color = "red", size = 1, linetype = "dashed") +
+  labs(x = "Age", y = "Average Composite Score")
+
+
+summary(avg_quad_model)
+
+
+# Residual analysis
+hist(residuals(avg_quad_model), main = "Histogram of Residuals", xlab = "Residuals")
+
+plot(fitted(avg_quad_model), residuals(avg_quad_model), 
+     main = "Residuals vs. Fitted Values", xlab = "Fitted Values", ylab = "Residuals")
+abline(h = 0, col = "red", lty = 2)
+
+qqnorm(residuals(avg_quad_model), main = "Normal Q-Q Plot")
+qqline(residuals(avg_quad_model), col = "red", lty = 2)
+
+plot(averages$player_age, residuals(avg_quad_model),
+     main = "Residuals vs. Player Age", xlab = "Player Age", ylab = "Residuals")
+abline(h = 0, col = "red", lty = 2)
+
+
+
+```
+
+# Cubic model
+
+```{r}
+
+# Fit a cubic regression model using the average composite score by age
+avg_cubic_model <- lm(avg_CompositeScore ~ poly(player_age, 3), data = averages)
+
+# Predictions for the cubic model
+avg_cubic_predictions <- predict(avg_cubic_model, newdata = data.frame(player_age = age_seq))
+
+# Plot the actual averages and predicted values with a bar plot
+ggplot() +
+  geom_bar(data = averages, aes(x = player_age, y = avg_CompositeScore), stat = "identity", fill = "skyblue", color = "black") +
+  geom_line(data = data.frame(player_age = age_seq, predicted_avg_cubic = avg_cubic_predictions),
+            aes(x = player_age, y = predicted_avg_cubic), color = "red", size = 1, linetype = "dashed") +
+  labs(x = "Age", y = "Average Composite Score")
+
+summary(avg_cubic_model)
+
+
+```
+
+# Use for loop to create individual player time series
+
+```{r}
+
+# Making a simpler dataset with just player_id, player_age, and composite_score
+
+composite_data <- select(selected_data_filtered, player_id, player_age, CompositeScore)
+
+
+# Assuming your data frame is called df
+
+# Get unique player IDs
+unique_players <- unique(composite_data$player_id)
+
+# Create an empty list to store time series
+time_series_list <- list()
+
+# Iterate over unique player IDs
+for (player_id in unique_players) {
+  # Subset data for each player
+  player_data <- composite_data[composite_data$player_id == player_id, ]
+  
+  # Create time series for player's age
+  player_time_series <- ts(player_data$CompositeScore, start = player_data$player_age[1])
+  
+  # Add time series to the list
+  time_series_list[[as.character(player_id)]] <- player_time_series
+}
+
+# Now time_series_list contains time series for each unique player ID
+
+# Showing the data for the player Jose Abreu
+time_series_list$"547989"
+
+```
+
+# Create NARX model for each time series
+
+```{r}
+
+model <- narx(time_series_list$"592743", svm, p = 1, freq = 1)
+
+fcst <- forecast(model, h = 5)
+
+plot(fcst)
+
+```
+
+
+# Create t-test boxplots where you take players with 
+
+```{r}
+
+
+delta_t_test <- function(data, age_1, age_2, var) {
+  # Find unique player_ids with both age_1 and age_2
+  players_with_both_ages <- unique(data$player_id[data$player_age == age_1 & data$player_id %in%  unique(data$player_id[data$player_age == age_2])])
+  
+  # Filter the data for these players
+  filtered_data <- data[data$player_id %in% players_with_both_ages, ]
+  
+  # Create a new dataset with columns age_1_var, age_2_var, and delta
+  age_1_var <- filtered_data[filtered_data$player_age == age_1, c("player_id", var)]
+  colnames(age_1_var)[2] <- paste0("age_", age_1, "_", var)
+  
+  age_2_var <- filtered_data[filtered_data$player_age == age_2, c("player_id", var)]
+  colnames(age_2_var)[2] <- paste0("age_", age_2, "_", var)
+  
+  new_data <- merge(age_1_var, age_2_var, by = "player_id")
+  
+  print(new_data)
+  
+  new_data$delta <- new_data[[paste0("age_", age_2, "_", var)]] - new_data[[paste0("age_", age_1, "_", var)]]
+  
+  # Check the number of observations
+  cat("Number of observations:", nrow(new_data), "\n")
+  
+  # Perform t-test
+  result <- t.test(new_data$delta)
+  
+  return(result)
+}
+
+# Example usage:
+# Assuming your data is stored in a data frame called 'data'
+# where 'player_id', 'age', and 'var' are column names
+result <- delta_t_test(composite_data, 34, 37, "CompositeScore")
+
+print(result)
+
+# Interpret the results
+cat("T-statistic:", result$statistic, "\n")
+cat("Degrees of freedom:", result$parameter, "\n")
+cat("P-value:", result$p.value, "\n")
+cat("95% Confidence Interval for the Difference:", result$conf.int, "\n")
+cat("Estimated Mean Difference (delta):", result$estimate, "\n")
+
+```
+
+
+# T-test loop
+
+```{r}
+
+# Define a function to run delta_t_test in a loop
+run_delta_t_test_loop <- function(data, start_age, end_age, var) {
+  results <- list()
+  
+  for (age_1 in start_age:end_age) {
+    age_2 <- age_1 + 3
+    
+    cat("Running delta_t_test for ages:", age_1, "and", age_2, "\n")
+    
+    result <- delta_t_test(data, age_1, age_2, var)
+    
+    results[[paste0("Age_", age_1, "_", age_2)]] <- result
+  }
+  
+  return(results)
+}
+
+# Call the function to run delta_t_test in a loop
+results <- run_delta_t_test_loop(composite_data, 21, 36, "CompositeScore")
+
+results
+
+# Extract t-values from results
+t_values <- sapply(results, function(x) x$statistic)
+
+# Create a data frame from the t-values
+t_values_df <- data.frame(Age_Pair = names(t_values), t_value = t_values)
+
+# Print the data frame
+print(t_values_df)
+
+
+# Create plot
+plot(t_values)
+
+
+# Extract p-values from results
+p_values <- sapply(results, function(x) x$p.value)
+
+# Create a data frame from the t-values
+p_values_df <- data.frame(Age_Pair = names(p_values), p_value = p_values)
+
+# Print the data frame
+print(p_values_df)
+
+
+# Create plot
+plot(p_values)
+
+
+
+# Risk signing 26 year old
+
+
+```
+
+
+
+```{r}
+
+# Convert t_values and p_values to data frames with appropriate index values
+t_values_df <- data.frame(player_age = seq(21, 36), t_value = t_values)
+p_values_df <- data.frame(player_age = seq(21, 36), p_value = p_values)
+
+# Create plot for t_values
+t_plot <- ggplot(t_values_df, aes(x = player_age, y = t_value)) +
+           geom_point() +
+           labs(x = "Player Age", y = "t-value")  # Rename the axis labels
+
+# Create plot for p_values
+p_plot <- ggplot(p_values_df, aes(x = player_age, y = p_value)) +
+           geom_point() +
+           labs(x = "Player Age", y = "p-value") +  # Rename the axis labels
+           geom_hline(yintercept = 0.05, linetype = "solid", color = "black")  # Add a solid line at y = 0.05
+
+# Display the plots
+print(t_plot)
+print(p_plot)
+
+
+```
