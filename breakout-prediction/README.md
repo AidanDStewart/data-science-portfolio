@@ -120,9 +120,9 @@ Plotted:
 
 
 Key Observations:
-- Strong xBA in upper zone
-- Lower xSLG in upper zone (opportunity to elevate)
-- Middle-middle pitches under-optimized
+- Inconsistenties in the top part of the zone between xBA and xSLG 
+- Up and in, as well as low and away pitches can be attacked more
+
 
 ---
 
