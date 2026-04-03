@@ -95,6 +95,9 @@ These findings can inform:
 - Player valuation  
 - Roster construction decisions  
 
+### Model Fit (Quadratic Regression)
+![Model Fit](images/NormalizedQuadModel.png)
+
 ---
 
 ## Repository Contents
