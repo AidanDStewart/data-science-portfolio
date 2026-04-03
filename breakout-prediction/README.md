@@ -6,6 +6,16 @@ R | baseballr | FanGraphs Data
 
 ---
 
+## Problem
+MLB teams invest heavily in player development and contracts, making it critical to identify players likely to significantly improve performance.
+
+This project addresses that by:
+- Predicting breakout probability using historical performance data  
+- Identifying key variables associated with player improvement  
+- Providing actionable insights for player development and roster decisions
+
+---
+
 ## Project Objective
 
 Using publicly available FanGraphs data, I built a predictive model to estimate the probability that an MLB hitter would “break out” in the following season.
@@ -75,7 +85,7 @@ I excluded players with >3 WAR seasons in 2025, focusing on players likely to ta
 - Team: St. Louis Cardinals  
 - Position: Right Field  
 - Former 1st Round Draft Pick (2020)  
-- Career WAR (first 3 seasons): -0.9  
+- Career WAR (first 3 seasons): -0.9 
 
 Model breakout probability: **0.73**
 
