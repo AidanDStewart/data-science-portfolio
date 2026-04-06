@@ -1,5 +1,5 @@
 CREATE TABLE IF NOT EXISTS hitters (
-    player_id TEXT,
+    player_id TEXT PRIMARY KEY,
     player_name TEXT,
     team TEXT,
     season INTEGER,
@@ -17,3 +17,5 @@ CREATE TABLE IF NOT EXISTS hitters (
     war REAL,
     active_flag INTEGER
 );
+
+CREATE INDEX idx_team_season ON hitters(team, season);
