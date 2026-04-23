@@ -18,4 +18,4 @@ CREATE TABLE IF NOT EXISTS hitters (
     active_flag INTEGER
 );
 
-CREATE INDEX idx_team_season ON hitters(team, season);
+CREATE INDEX IF NOT EXISTS idx_team_season ON hitters(team, season);

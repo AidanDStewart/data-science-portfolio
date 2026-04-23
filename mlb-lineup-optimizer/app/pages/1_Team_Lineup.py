@@ -1,5 +1,6 @@
 import streamlit as st
 import pandas as pd
+import subprocess
 import sqlite3
 import sys
 import os
@@ -31,6 +32,8 @@ from logic.optimizer import build_lineup
 # SIDEBAR FILTERS
 st.sidebar.header("Filters")
 
+refresh_data = st.sidebar.button("Refresh Data")
+
 min_pa = st.sidebar.slider(
     "Minimum Plate Appearances",
     min_value = 0,
@@ -47,6 +50,22 @@ df_filtered = df[
     (df["pa"] >= min_pa) & 
     (df["team"] == selected_team)
 ]
+
+
+if refresh_data:
+    with st.spinner("Refreshing data..."):
+        
+        try:
+            subprocess.run(["python", "pipeline/clean_data.py"], check=True)
+            subprocess.run(["python", "pipeline/load_db.py"], check=True)
+
+            st.success("Data refreshed successfully!")
+            st.cache_data.clear()
+
+        except subprocess.CalledProcessError as e:
+            st.error(f"Data refresh failed: {e}")
+            st.stop()
+        
 
 # When the user clicks the "Generate Lineup" button, calculate scores and build the lineup
 if generate:
